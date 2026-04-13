@@ -1,0 +1,11 @@
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
+
+client = gspread.authorize(creds)
+spreadsheet = client.open("Restaurant_System")
+
+orders_sheet = spreadsheet.worksheet("Orders")
+menu_sheet = spreadsheet.worksheet("Menu")
