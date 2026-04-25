@@ -15,7 +15,7 @@ def run_test_chat():
         sys.exit(1)
 
     # تحديد رقم تليفون وهمي للتجربة
-    test_phone = "+37289421832"
+    test_phone = "+3728942184343"
     print(f"📱 تم تعيين رقم هاتف تجريبي: {test_phone}")
     print("💡 اكتب 'exit' أو 'quit' للخروج من المحادثة.\n")
     print("="*50)
