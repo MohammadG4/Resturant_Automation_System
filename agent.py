@@ -147,8 +147,8 @@ class WhatsAppAgent:
 
                 # Pick your client + model here — swap as needed
                 return self._run_agent_loop(
-                    client=groq_client,
-                    model="llama-3.3-70b-versatile",
+                    client=openrouter_client,
+                    model="nvidia/nemotron-3-super-120b-a12b:free",
                     user_phone=user_phone,
                     history=history,
                 )
