@@ -1,18 +1,24 @@
 import json
 import redis
-from groq import Groq, RateLimitError
-from config import GROQ_API_KEY, MAX_HISTORY, MAX_TOOL_CALLS, SESSION_TIMEOUT_SECONDS
-from tools import restaurant_tools,execute_tool_call, get_menu_from_sheet
+from groq import Groq, RateLimitError as GroqRateLimitError
+from openai import OpenAI, RateLimitError as OpenAIRateLimitError
+from config import GROQ_API_KEY, MAX_HISTORY, MAX_TOOL_CALLS, SESSION_TIMEOUT_SECONDS, OPENROUTER_API_KEY
+from tools import restaurant_tools, execute_tool_call
 from database import redis_client
 
-# Initialize Redis Connection
-client = Groq(api_key=GROQ_API_KEY)
+# Two separate, named clients
+groq_client = Groq(api_key=GROQ_API_KEY)
+
+openrouter_client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
 
 class WhatsAppAgent:
 
-    def _get_system_instruction(self,whatsapp_number):
+    def _get_system_instruction(self, whatsapp_number):
         return (
-    "Role & Persona\n"
+            "Role & Persona\n"
     "You are a polite, helpful AI assistant for a restaurant. Your job is to help customers view the menu, place orders, and modify or cancel existing orders.\n"
     "Language & Tone: You must communicate EXCLUSIVELY in Professional Egyptian Arabic (العامية المصرية المهذبة).\n"
     "Professionalism: Always use respectful terms of address such as 'حضرتك' or 'يا فندم'. STRICTLY AVOID street slang, overly casual words, or overly familiar terms (e.g., never use 'يسطا', 'يا صاحبي', etc.).\n"
@@ -53,7 +59,7 @@ class WhatsAppAgent:
     "TOOL CALLING CONSTRAINT:\n"
             "DO NOT write tool calls like <function=...> in your text response. ONLY use the native tool calling API.\n\n"
 
-    )
+        )
 
     def _get_session(self, phone: str) -> list:
         session_data = redis_client.get(f"session:{phone}")
@@ -69,83 +75,87 @@ class WhatsAppAgent:
             json.dumps(trimmed_history)
         )
 
-    def handle_message(self, user_phone: str, message_text: str) -> str:
+    def _run_agent_loop(self, client, model: str, user_phone: str, history: list) -> str:
+        """Single agentic loop — reusable for any client/model combo."""
+        tool_call_count = 0
 
+        while True:
+            if tool_call_count >= MAX_TOOL_CALLS:
+                error_msg = "بعتذر لحضرتك جداً، في مشكلة بسيطة في السيستم دلوقتي. ممكن نحاول نأكد الطلب تاني؟"
+                history.append({"role": "assistant", "content": error_msg})
+                self._save_session(user_phone, history)
+                return error_msg
+
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "system", "content": self._get_system_instruction(user_phone)}] + history,
+                tools=restaurant_tools,
+                tool_choice="auto",
+                temperature=0.0,
+                max_tokens=512,
+            )
+
+            request_number = redis_client.incr("global_api_requests")
+            message = response.choices[0].message
+
+            if hasattr(response, "usage") and response.usage:
+                self.current_usage = {
+                    "request_number": request_number,
+                    "prompt": response.usage.prompt_tokens,
+                    "completion": response.usage.completion_tokens,
+                    "total": response.usage.total_tokens,
+                }
+
+            if not message.tool_calls:
+                reply = message.content or "عفواً، مفهمتش حضرتك، ممكن توضح أكتر؟"
+                history.append({"role": "assistant", "content": reply})
+                self._save_session(user_phone, history)
+                return reply
+
+            tool_call_count += 1
+
+            history.append({
+                "role": "assistant",
+                "content": message.content or "",
+                "tool_calls": [tc.model_dump() for tc in message.tool_calls],
+            })
+
+            for tool_call in message.tool_calls:
+                tool_name = tool_call.function.name
+                tool_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+
+                print(f"[TOOL CALL] {tool_name}({tool_args})")
+                tool_result = execute_tool_call(tool_name, tool_args)
+                print(f"[TOOL RESULT] {tool_result}")
+
+                if tool_name == "add_new_order" and "success" in str(tool_result).lower():
+                    tool_result += "\n[SYSTEM STRICT DIRECTIVE: Order confirmed. Do NOT call add_new_order again for this session.]"
+
+                history.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": str(tool_result),
+                })
+
+    def handle_message(self, user_phone: str, message_text: str) -> str:
         lock_name = f"lock:{user_phone}"
-        
+
         try:
             with redis_client.lock(lock_name, timeout=60, blocking_timeout=10):
-                
-                # 1. Fetch history from Redis
                 history = self._get_session(user_phone)
-
-                # 2. Append new user message
                 history.append({"role": "user", "content": message_text})
-                
-                tool_call_count = 0
 
-                while True:
-                    if tool_call_count >= MAX_TOOL_CALLS:
-                        error_msg = "بعتذر لحضرتك جداً، في مشكلة بسيطة في السيستم دلوقتي. ممكن نحاول نأكد الطلب تاني؟"
-                        history.append({"role": "assistant", "content": error_msg})
-                        self._save_session(user_phone, history)
-                        return error_msg
-
-                    # API Call to Groq
-                    response = client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=[{"role": "system", "content": self._get_system_instruction(user_phone)}] + history,
-                        tools=restaurant_tools,
-                        tool_choice="auto",
-                        temperature=0.0,
-                        max_tokens=512,
-                    )
-                    request_number = redis_client.incr("global_api_requests")
-                    message = response.choices[0].message
-                    if hasattr(response, 'usage') and response.usage:
-                        self.current_usage = {
-                            "request_number": request_number,
-                            "prompt": response.usage.prompt_tokens,
-                            "completion": response.usage.completion_tokens,
-                            "total": response.usage.total_tokens
-                        }
-                    if not message.tool_calls:
-                        reply = message.content or "عفواً، مفهمتش حضرتك، ممكن توضح أكتر؟"
-                        history.append({"role": "assistant", "content": reply})
-                        
-                        # 3. SAVE TO REDIS before returning
-                        self._save_session(user_phone, history)
-                        return reply
-
-                    tool_call_count += 1
-
-                    history.append({
-                        "role": "assistant",
-                        "content": message.content or "",
-                        "tool_calls": [tc.model_dump() for tc in message.tool_calls]
-                    })
-
-                    for tool_call in message.tool_calls:
-                        tool_name = tool_call.function.name
-                        tool_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
-
-                        print(f"[TOOL CALL] {tool_name}({tool_args})")
-                        tool_result = execute_tool_call(tool_name, tool_args)
-                        print(f"[TOOL RESULT] {tool_result}")
-
-                        if tool_name == "add_new_order" and "success" in str(tool_result).lower():
-                            tool_result += "\n[SYSTEM STRICT DIRECTIVE: Order confirmed. Do NOT call add_new_order again for this session.]"
-
-                        history.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": str(tool_result),
-                        })
+                # Pick your client + model here — swap as needed
+                return self._run_agent_loop(
+                    client=groq_client,
+                    model="llama-3.3-70b-versatile",
+                    user_phone=user_phone,
+                    history=history,
+                )
 
         except redis.exceptions.LockError:
-            # لو العميل فضل يبعت رسايل ورا بعض والسيستم مقفول عليه، هنرد عليه بالرسالة دي
             return "لحظة واحدة يا فندم، السيستم بيعالج رسالتك اللي فاتت..."
-        except RateLimitError:
+        except (GroqRateLimitError, OpenAIRateLimitError):
             return "السيستم عليه ضغط شوية يا فندم، ثواني ونجرب تاني! 🙏"
         except Exception as e:
             print(f"[ERROR] {e}")
