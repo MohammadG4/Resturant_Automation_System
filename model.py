@@ -9,10 +9,20 @@ class OrderCreate(BaseModel):
     total_price: float
 
 class OrderUpdate(BaseModel):
-    # Everything is Optional so you can update just one field (like status) or multiple
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None
     delivery_address: Optional[str] = None
     items: Optional[List[Dict[str, Any]]] = None
     total_price: Optional[float] = None
     status: Optional[str] = None
+
+
+class MenuCreate(BaseModel):
+    item_name: str
+    price: float
+    available: bool = True
+
+class MenuUpdate(BaseModel):
+    item_name: Optional[str] = None
+    price: Optional[float] = None
+    available: Optional[bool] = None

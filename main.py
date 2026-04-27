@@ -1,11 +1,12 @@
+from pyexpat import model
+
 from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware 
 import requests
 from config import WHATSAPP_TOKEN, PHONE_NUMBER_ID,VERIFY_TOKEN,ORIGINS_LIST
 from agent import WhatsAppAgent
-from utils import get_all_orders, get_orders_by_phone, get_order_by_id, add_order, update_order_by_id
-from model import OrderCreate,OrderUpdate
-
+from utils import get_all_orders, get_orders_by_phone, get_order_by_id, add_order, update_order_by_id, get_menu, add_menu, update_menu, delete_menu_by_id
+from model import OrderCreate, OrderUpdate, MenuCreate, MenuUpdate
 
 app = FastAPI(title="AI Restaurant Agent")
 agent = WhatsAppAgent()
@@ -146,6 +147,55 @@ async def update_existing_order(order_id: int, order_update: OrderUpdate):
         "message": f"Order {order_id} updated successfully.", 
         "updated_fields": update_data
     }
+
+@app.get("/menu")
+async def fetch_menu():
+    """Fetch the entire menu."""
+    menu_items = get_menu()
+    return {"menu": menu_items}
+
+@app.post("/menu")
+async def create_new_menu_item(item: MenuCreate):
+    """Add a new item to the menu."""
+    new_item = add_menu(
+        item_name=item.item_name,
+        price=item.price,
+        available=item.available
+    )
+    if not new_item:
+        raise HTTPException(status_code=500, detail="Failed to add menu item.")
+    return {"item": new_item}
+
+@app.patch("/menu/{item_id}")
+async def update_existing_menu_item(item_id: int, item_update: MenuUpdate):
+    """Update an existing menu item (e.g., change price or availability)."""
+    # Exclude fields that were not explicitly set in the request
+    update_data = item_update.model_dump(exclude_unset=True)
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No data provided to update.")
+
+    # Call the dynamic update function
+    success = update_menu(item_id, update_data)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Menu item not found or update failed.")
+        
+    return {
+        "message": f"Menu item {item_id} updated successfully.", 
+        "updated_fields": update_data
+    }
+
+@app.delete("/menu/{item_id}")
+async def remove_menu_item(item_id: int):
+    """Delete a menu item by its ID."""
+    success = delete_menu_by_id(item_id)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Menu item not found or could not be deleted.")
+        
+    return {"message": f"Menu item {item_id} deleted successfully."}
+
 
 if __name__ == "__main__":
     import uvicorn
