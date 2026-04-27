@@ -1,15 +1,29 @@
 from fastapi import FastAPI, Request, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware 
 import requests
-from config import WHATSAPP_TOKEN, PHONE_NUMBER_ID
+from config import WHATSAPP_TOKEN, PHONE_NUMBER_ID,VERIFY_TOKEN,ORIGINS_LIST
 from agent import WhatsAppAgent
+from utils import get_all_orders, get_orders_by_phone, get_order_by_id, add_order, update_order_by_id
+from model import OrderCreate,OrderUpdate
+
 
 app = FastAPI(title="AI Restaurant Agent")
 agent = WhatsAppAgent()
 
+origins = ORIGINS_LIST
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"], # Allows all methods (GET, POST, PATCH, etc.)
+    allow_headers=["*"], # Allows all headers
+)
+
 # Make sure this exactly matches what you type in the Meta Dashboard!
-VERIFY_TOKEN = "verify_for_me_tklsfofo" 
+# VERIFY_TOKEN = "verify_for_me_tklsfofo" 
 
 # In-memory session store 
+
 sessions = {}
 
 async def send_whatsapp_message(to_number: str, text: str):
@@ -29,6 +43,9 @@ async def send_whatsapp_message(to_number: str, text: str):
     if response.status_code != 200:
         print(f"Failed to send message: {response.text}")
 
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the AI Restaurant Agent! Send a message to our WhatsApp number to place an order."}
 
 # --- ADD THIS BLOCK FOR META VERIFICATION ---
 @app.get("/webhook")
@@ -78,6 +95,57 @@ async def receive_whatsapp_message(request: Request):
         pass
 
     return {"status": "ok"}
+@app.get("/orders")
+async def get_orders():
+    orders = get_all_orders()
+    return {"orders": orders}
+
+@app.get("/orders/{phone}")
+async def get_orders_by_customer(phone: str):
+    orders = get_orders_by_phone(phone)
+    if not orders:
+        raise HTTPException(status_code=404, detail="No orders found for this phone number.")
+    return {"orders": orders}
+
+@app.get("/order/{id}")
+async def fetch_order_by_id(id: int): # Renamed function to avoid conflict with imported DB function
+    order = get_order_by_id(id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    return {"order": order}
+
+@app.post("/order")
+async def create_new_order(order: OrderCreate):
+    # Extract validated data from Pydantic model and pass to the DB function
+    new_order = add_order(
+        customer_name=order.customer_name,
+        customer_phone=order.customer_phone,
+        delivery_address=order.delivery_address,
+        items=order.items,
+        total_price=order.total_price
+    )
+    if not new_order:
+        raise HTTPException(status_code=500, detail="Failed to create order.")
+    return {"order": new_order}
+
+@app.patch("/order/{order_id}")
+async def update_existing_order(order_id: int, order_update: OrderUpdate):
+    # .model_dump(exclude_unset=True) ensures we only grab fields the user actually sent
+    update_data = order_update.model_dump(exclude_unset=True)
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No data provided to update.")
+
+    # Call the dynamic update function we built earlier
+    success = update_order_by_id(order_id, update_data)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Order not found or update failed.")
+        
+    return {
+        "message": f"Order {order_id} updated successfully.", 
+        "updated_fields": update_data
+    }
 
 if __name__ == "__main__":
     import uvicorn

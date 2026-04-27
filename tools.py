@@ -4,6 +4,9 @@ from database import get_db_connection, redis_client
 from config import REFRESH_MENU_PERIOD
 from psycopg2.extras import RealDictCursor
 
+
+
+
 def get_menu() -> str:
     cached_menu = redis_client.get("restaurant_menu")
     if cached_menu:

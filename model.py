@@ -1,16 +1,18 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Dict, List, Any, Optional
 
-# Define the structure for a single item in an order
-class OrderItem(BaseModel):
-    item_name: str
-    price: float
-    available: bool
-
-# Define the structure for the complete order
 class OrderCreate(BaseModel):
-    order_id: str
     customer_name: str
     customer_phone: str
+    delivery_address: str
+    items: List[Dict[str, Any]]
+    total_price: float
+
+class OrderUpdate(BaseModel):
+    # Everything is Optional so you can update just one field (like status) or multiple
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
     delivery_address: Optional[str] = None
-    items: List[OrderItem]
+    items: Optional[List[Dict[str, Any]]] = None
+    total_price: Optional[float] = None
+    status: Optional[str] = None
